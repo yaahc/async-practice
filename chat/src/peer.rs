@@ -1,12 +1,12 @@
 use tokio::{
     codec::{FramedWrite, LinesCodec},
-    sync::mpsc,
     io::AsyncWrite,
+    sync::mpsc,
 };
 
 use futures::{Sink, SinkExt, StreamExt};
-use tracing::{debug, trace};
 use std::fmt;
+use tracing::{debug, trace};
 
 pub struct Forward {
     rx: mpsc::UnboundedReceiver<String>,
@@ -22,7 +22,7 @@ impl Peer {
     // `Forward` that forwards those messages on the peer's connection.
     pub fn new() -> (Self, Forward) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let peer = Self { tx, };
+        let peer = Self { tx };
         let forward = Forward { rx };
         (peer, forward)
     }

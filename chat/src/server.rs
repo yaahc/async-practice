@@ -11,7 +11,7 @@ use tracing_futures::Instrument;
 
 use super::peer::{self, Peer};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Server {
     peers: Lock<Peers>,
 }
@@ -20,11 +20,10 @@ type Peers = HashMap<SocketAddr, Peer>;
 
 impl Server {
     pub fn new() -> Self {
-        Self {
-            peers: Lock::new(Peers::new()),
-        }
+        Self::default()
     }
 
+    #[allow(clippy::cognitive_complexity)]
     pub async fn serve_connection(mut self, connection: TcpStream, addr: SocketAddr) {
         // Split the TcpStream into read and write halves.
         let (read, write) = connection.split();
@@ -58,15 +57,17 @@ impl Server {
         // broadcast to that peer.
         tokio::spawn(forward.forward_to(write));
 
-
         // For each line received from the peer, broadcast that line to all the
         // other peers.
-        unimplemented!()
+        while let Some(Ok(msg)) = read_lines.next().await {
+            self.broadcast(addr, format!("{}: {}", name, msg)).await;
+        }
 
         // When the stream ends, the peer has disconnected. Remove it from the
         // map and let everyone else know.
         self.remove_peer(addr).await;
-        self.broadcast(addr, format!("{} ({}) left the chat!", name, addr)).await;
+        self.broadcast(addr, format!("{} ({}) left the chat!", name, addr))
+            .await;
     }
 
     /// Add a new peer to the server, returning a task that will forward
@@ -87,9 +88,14 @@ impl Server {
     #[tracing::instrument]
     async fn broadcast(&mut self, from: SocketAddr, msg: String) {
         debug!("broadcasting...");
+        let mut peers = self.peers.lock().await;
+        let mut sends = vec![];
+        for (peer_addr, peer) in &mut *peers {
+            if *peer_addr != from {
+                sends.push(peer.send(msg.clone()));
+            }
+        }
 
-        // Implement `broadcast` by sending the message to each other peer in
-        // `self.peers.
-        unimplemented!();
+        futures::future::join_all(sends).await;
     }
 }

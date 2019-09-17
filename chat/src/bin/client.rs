@@ -1,6 +1,7 @@
 use structopt::StructOpt;
 
-use futures::{Stream, Sink, SinkExt, StreamExt, TryStream, TryStreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt, TryStream, TryStreamExt};
+use std::io::Write;
 use std::net::SocketAddr;
 use tokio::{
     codec::{FramedRead, FramedWrite, LinesCodec},
@@ -23,7 +24,12 @@ type Error = Box<dyn std::error::Error>;
 
 /// Splits a `TcpStream` of raw bytes into a `Stream` of lines and a sink that
 /// we can write lines to.
-fn lines_from_conn(conn: TcpStream) -> (impl Stream<Item = Result<String, Error>>, impl Sink<String, Error = Error>) {
+fn lines_from_conn(
+    conn: TcpStream,
+) -> (
+    impl Stream<Item = Result<String, Error>>,
+    impl Sink<String, Error = Error>,
+) {
     // Split `conn` into a read half and a write half, implementing the
     // AsyncRead trait and the AsyncWrite trait, respectively.
     let (read, write) = conn.split();
@@ -61,11 +67,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (recv_lines, mut send_lines) = lines_from_conn(conn);
 
     // Start by sending the server our username.
-    send_lines.send(user).await?;
+    send_lines.send(user.clone()).await?;
 
     // Now you try! To finish implementing the client, we'll need to
     // continuously read from stdin and from `recv_lines`. When we receive a
     // line from stdin, we'll need to write that line to `send_lines`. When we
     // receive a line from `read_lines`, we need to print that to stdout.
-    unimplemented!()
+    let _ = futures::future::try_join(
+        forward_input(send_lines, &user),
+        recv_msgs(recv_lines, &user),
+    )
+    .await?;
+
+    Ok(())
+}
+
+fn valid_message(msg: &str) -> bool {
+    msg.find('\n').map(|ind| ind == msg.len()).unwrap_or(false)
+}
+
+fn print_shell(username: &str) {
+    print!("{}: ", username);
+    std::io::stdout().flush().ok();
+}
+
+async fn forward_input<S>(mut to_server: S, username: &str) -> Result<(), Error>
+where
+    S: Sink<String, Error = Error>,
+    S: std::marker::Unpin,
+{
+    print_shell(username);
+    let mut stdin = lines_from_stdin();
+    while let Some(line) = stdin.next().await {
+        let line = line?;
+        if !valid_message(&line) {
+            tracing::warn!(%line, "message is possibly invalid");
+        }
+
+        to_server.send(line).await?;
+        print_shell(username);
+    }
+
+    Ok(())
+}
+
+async fn recv_msgs<S>(mut from_server: S, username: &str) -> Result<(), Error>
+where
+    S: Stream<Item = Result<String, Error>>,
+    S: std::marker::Unpin,
+{
+    while let Some(msg) = from_server.next().await {
+        let msg = msg?;
+        println!("\r{}", msg);
+        print_shell(username);
+    }
+
+    Ok(())
 }
